@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "face-puzzle",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "/Users/mauricioquezada/M15_Dev/game-derretido"],
+      "port": 8765
+    }
+  ]
+}

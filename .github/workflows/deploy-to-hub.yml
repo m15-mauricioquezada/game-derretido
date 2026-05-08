@@ -1,0 +1,29 @@
+name: Deploy to Hub
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone hub
+        run: |
+          git clone https://x-access-token:${{ secrets.HUB_DEPLOY_TOKEN }}@github.com/m15-mauricioquezada/kitchhero-games.git hub
+
+      - name: Copy game to hub
+        run: |
+          mkdir -p hub/web/public/derretido
+          cp face-puzzle.html hub/web/public/derretido/index.html
+
+      - name: Commit and push to hub
+        run: |
+          cd hub
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add web/public/derretido/
+          git diff --staged --quiet || git commit -m "deploy(derretido): update from ${{ github.repository }}@${{ github.sha }}"
+          git push
