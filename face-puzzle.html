@@ -473,11 +473,20 @@ async function startCamera() {
     throw e;
   }
   dom.video.srcObject = stream;
-  await new Promise(res => {
-    dom.video.onloadedmetadata = () => { dom.video.play(); res(); };
-  });
-  videoW = dom.video.videoWidth;
-  videoH = dom.video.videoHeight;
+
+  // Robusto contra race condition: loadedmetadata puede disparar antes de asignar el handler
+  if (dom.video.readyState < 1) {
+    await new Promise(r => dom.video.addEventListener('loadedmetadata', r, { once: true }));
+  }
+  await dom.video.play();
+
+  // Algunos browsers/móviles reportan videoWidth=0 brevemente tras metadata
+  if (!dom.video.videoWidth) {
+    await new Promise(r => dom.video.addEventListener('canplay', r, { once: true }));
+  }
+
+  videoW = dom.video.videoWidth || 640;
+  videoH = dom.video.videoHeight || 480;
   fitOverlay();
   hideLoading();
 }

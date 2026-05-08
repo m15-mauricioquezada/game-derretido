@@ -198,25 +198,32 @@ Ranking por score:
 
 ---
 
-## 7. Bug pendiente
+## 7. Bugs resueltos (continuación)
 
-### Bug 3: Cámara no muestra nada después de dar permisos
+### Bug 3: Cámara no muestra nada después de dar permisos ✓ resuelto
 
-**Síntoma reportado**: Al pulsar "Iniciar cámara", el usuario otorga permisos pero "no pasa nada" — pantalla queda en negro.
+**Síntoma**: Al pulsar "Iniciar cámara", el usuario otorga permisos pero la pantalla queda en negro.
 
-**Hipótesis principal** (sin verificar aún):
-- El `<video>` tiene `visibility: hidden` en CSS. Solo se ve el `<canvas>` overlay dibujado en el render loop.
-- El render loop usa `dom.video.videoWidth/videoHeight`, que pueden ser `0` si `loadedmetadata` no disparó (race condition: el handler se asigna *después* de que el evento ya se disparó).
-- Resultado: canvas dimensionado a 0×0 → pantalla negra silenciosa, sin error.
+**Causa**: Race condition en `startCamera()`. El código original asignaba `onloadedmetadata` *después* de setear `srcObject`. Si el evento ya había disparado (común en Chrome mobile y Safari), la Promise nunca resolvía, `videoWidth` quedaba 0, y el canvas se dimensionaba a 0×0.
 
-**Fix propuesto** (no aplicado todavía):
-1. Cambiar el patrón de espera a algo robusto:
-   ```js
-   if (video.readyState >= 1) { /* ya tiene metadata */ }
-   else { await new Promise(r => video.addEventListener('loadedmetadata', r, {once:true})); }
-   ```
-2. Quitar `visibility: hidden` del video y manejar la oclusión con `z-index` + `opacity:0` o dejar el video debajo del canvas.
-3. Agregar logs de status visibles en cada paso (`Solicitando cámara` → `Stream OK` → `Metadata OK` → `Detectando…`) para debug.
+**Fix aplicado** (en `startCamera()`):
+```js
+dom.video.srcObject = stream;
+
+// Robusto contra race condition
+if (dom.video.readyState < 1) {
+  await new Promise(r => dom.video.addEventListener('loadedmetadata', r, { once: true }));
+}
+await dom.video.play();
+
+// Algunos browsers reportan videoWidth=0 brevemente tras metadata
+if (!dom.video.videoWidth) {
+  await new Promise(r => dom.video.addEventListener('canplay', r, { once: true }));
+}
+
+videoW = dom.video.videoWidth || 640;
+videoH = dom.video.videoHeight || 480;
+```
 
 ---
 
