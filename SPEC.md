@@ -220,29 +220,17 @@ Ranking por score:
 
 ---
 
-## 8. Roadmap de publicación
+## 8. Publicación — Arquitectura multi-repo
 
-Pendiente de aprobación. Dos opciones evaluadas:
+El juego se publica mediante un flujo automático de GitHub Actions:
 
-### Opción B1 — Agregar al hub `games-kitchhero` (recomendada)
+1. Push a `main` en este repo (`m15-mauricioquezada/game-derretido`)
+2. El Action `.github/workflows/deploy-to-hub.yml` copia `face-puzzle.html` → `web/public/derretido/index.html` en el hub (`m15-mauricioquezada/kitchhero-games`)
+3. El hub detecta el push en `web/public/**` y ejecuta `firebase deploy --only hosting:prod`
+4. URL final: `https://games-kitchhero-prod.web.app/derretido/`
 
-Replicar el patrón de `pingpongale`:
-- Copiar `face-puzzle.html` → `game-pingpongale/web/public/derretido/index.html`.
-- Agregar tarjeta `🫠 Derretido` al hub `web/public/index.html`.
-- `firebase deploy --only hosting:prod` desde `game-pingpongale`.
-- URL final: `https://games-kitchhero-prod.web.app/derretido/`.
-
-**Ventaja**: hub ya configurado, deploy en 1 comando, consistente con pingpongale.
-
-### Opción B2 — Proyecto Firebase independiente
-
-- Crear `firebase.json` + `.firebaserc` en `game-derretido`.
-- Crear nuevo Firebase Hosting site desde Firebase Console.
-- Deploy.
-- URL final: `https://game-derretido.web.app` (o similar).
-
-**Ventaja**: repo y dominio independientes.
-**Desventaja**: más pasos manuales (crear site).
+**Secrets requeridos en este repo:**
+- `HUB_DEPLOY_TOKEN` — GitHub PAT con permisos `repo` + `workflow` sobre `kitchhero-games`
 
 ---
 
@@ -250,8 +238,9 @@ Replicar el patrón de `pingpongale`:
 
 ```
 game-derretido/
-├── face-puzzle.html       # juego completo, single-file, 1.37 MB
-└── SPEC.md                # este documento
+├── face-puzzle.html                        # juego completo, single-file, 1.37 MB
+├── SPEC.md                                 # este documento
+└── .github/workflows/deploy-to-hub.yml    # CI/CD → kitchhero-games hub
 ```
 
 Build artifacts (fuera del repo):
@@ -274,4 +263,4 @@ Build artifacts (fuera del repo):
 
 - face-api.js: https://github.com/justadudewhohacks/face-api.js
 - EAR (Eye Aspect Ratio): Soukupová & Čech, "Real-Time Eye Blink Detection using Facial Landmarks" (2016)
-- Patrón hub multi-juego: ver `/Users/mauricioquezada/M15_Dev/game-pingpongale/`
+- Hub multi-juego: `m15-mauricioquezada/kitchhero-games`
