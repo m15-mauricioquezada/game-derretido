@@ -474,16 +474,16 @@ async function startCamera() {
   }
   dom.video.srcObject = stream;
 
-  // Robusto contra race condition: loadedmetadata puede disparar antes de asignar el handler
+  // Esperar metadata (race-condition safe)
   if (dom.video.readyState < 1) {
     await new Promise(r => dom.video.addEventListener('loadedmetadata', r, { once: true }));
   }
-  await dom.video.play();
 
-  // Algunos browsers/móviles reportan videoWidth=0 brevemente tras metadata
-  if (!dom.video.videoWidth) {
-    await new Promise(r => dom.video.addEventListener('canplay', r, { once: true }));
-  }
+  // Registrar listener ANTES de play() para no perder el evento
+  // 'playing' garantiza que ya hay un frame decodificado — evita canvas negro
+  const playingP = new Promise(r => dom.video.addEventListener('playing', r, { once: true }));
+  await dom.video.play();
+  await playingP;
 
   videoW = dom.video.videoWidth || 640;
   videoH = dom.video.videoHeight || 480;
