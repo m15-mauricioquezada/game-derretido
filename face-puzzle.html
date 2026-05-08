@@ -392,7 +392,11 @@ globalThis.__origFetch = window.fetch.bind(window);
 window.fetch = customFetch;
 // face-api guarda env.fetch al cargar; lo reemplazamos también
 if (typeof faceapi !== 'undefined' && faceapi.env && faceapi.env.monkeyPatch) {
-  faceapi.env.monkeyPatch({ fetch: customFetch });
+  faceapi.env.monkeyPatch({
+    fetch: customFetch,
+    createCanvasElement: () => document.createElement('canvas'),
+    createImageElement: () => document.createElement('img'),
+  });
 }
 
 // ============================================================
