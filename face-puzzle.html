@@ -440,9 +440,13 @@ let fallSpeed = 2.4; // px / frame
 let skinColor = [200, 170, 150];
 let earState = { open: true, lastBlinkAt: 0 };
 let capturedLandmarks = null;
-const BLINK_THRESHOLD = 0.25;
-const BLINK_REOPEN = 0.30;
 const BLINK_COOLDOWN_MS = 400;
+let earBaseline = 0.32;
+let earCalibrated = false;
+const EAR_BLINK_RATIO = 0.65;
+const EAR_REOPEN_RATIO = 0.80;
+const earHistory = [];
+const EAR_HISTORY_SIZE = 3;
 
 // ============================================================
 // Setup
@@ -496,6 +500,24 @@ async function startCamera() {
   hideLoading();
 }
 
+async function calibrateEAR() {
+  setStatus('Mantén los ojos abiertos… calibrando', '');
+  const samples = [];
+  const start = performance.now();
+  while (performance.now() - start < 2000) {
+    const d = await detectOnce();
+    if (d) {
+      const pts = d.landmarks.positions;
+      const ear = (eyeEAR(pts.slice(36, 42)) + eyeEAR(pts.slice(42, 48))) / 2;
+      if (ear > 0.1) samples.push(ear);
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+  if (samples.length < 5) return 0.32;
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length * 0.75)];
+}
+
 function fitOverlay() {
   // El overlay tiene el mismo tamaño nativo que el video
   dom.overlay.width = videoW;
@@ -518,7 +540,7 @@ window.addEventListener('resize', fitOverlay);
 // ============================================================
 async function detectOnce() {
   if (!dom.video.videoWidth) return null;
-  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
   const det = await faceapi.detectSingleFace(dom.video, opts).withFaceLandmarks();
   return det || null;
 }
@@ -593,17 +615,29 @@ function eyeEAR(eyePts) {
   return (A + B) / (2 * C);
 }
 
+function smoothedEAR(rawEar) {
+  earHistory.push(rawEar);
+  if (earHistory.length > EAR_HISTORY_SIZE) earHistory.shift();
+  return earHistory.reduce((s, v) => s + v, 0) / earHistory.length;
+}
+
 function updateEar(lm) {
   const pts = lm.positions;
   const left = pts.slice(36, 42);
   const right = pts.slice(42, 48);
-  const ear = (eyeEAR(left) + eyeEAR(right)) / 2;
-  // Mapear EAR a barra: 0.10 cerrado → 0.35 abierto
-  const norm = Math.max(0, Math.min(1, (ear - 0.1) / 0.25));
+  const rawEar = (eyeEAR(left) + eyeEAR(right)) / 2;
+  const ear = smoothedEAR(rawEar);
+
+  // Barra visual: mapear usando baseline real
+  const norm = Math.max(0, Math.min(1, (ear - 0.1) / (earBaseline - 0.1)));
   dom.earFill.style.width = (norm * 100) + '%';
-  // Detección con histéresis
+
+  // Threshold dinámico basado en baseline calibrado
+  const blinkThreshold = earBaseline * EAR_BLINK_RATIO;
+  const reopenThreshold = earBaseline * EAR_REOPEN_RATIO;
+
   const now = performance.now();
-  if (earState.open && ear < BLINK_THRESHOLD) {
+  if (earState.open && ear < blinkThreshold) {
     earState.open = false;
     if (now - earState.lastBlinkAt > BLINK_COOLDOWN_MS) {
       earState.lastBlinkAt = now;
@@ -611,7 +645,7 @@ function updateEar(lm) {
       setTimeout(() => dom.blinkInd.classList.remove('blinking'), 200);
       onBlink();
     }
-  } else if (!earState.open && ear > BLINK_REOPEN) {
+  } else if (!earState.open && ear > reopenThreshold) {
     earState.open = true;
   }
 }
@@ -631,7 +665,7 @@ function expandPolygonAroundCentroid(points, factorX, factorY, padPx) {
   });
 }
 
-function capturePart(name, basePoints, expandX, expandY, pad) {
+function capturePart(name, basePoints, expandX, expandY, pad, captureRef) {
   const polygon = basePoints.map(p => ({x: p.x, y: p.y}));
   const expanded = expandPolygonAroundCentroid(polygon, expandX, expandY, pad);
   const xs = expanded.map(p => p.x), ys = expanded.map(p => p.y);
@@ -672,8 +706,14 @@ function capturePart(name, basePoints, expandX, expandY, pad) {
     bbox: { x: minX, y: minY, w, h },
     currentY: -h - 20,
     fixedY: null,
-    fixedX: minX + w/2, // X queda fija en su X original (el juego es solo de Y)
+    fixedX: minX + w/2,
     w, h,
+    captureRef,
+    relativeCenter: {
+      dx: (minX + w/2) - captureRef.cx,
+      dy: (minY + h/2) - captureRef.cy,
+    },
+    relativeSize: { w: w / captureRef.scale, h: h / captureRef.scale },
   };
 }
 
@@ -714,14 +754,15 @@ async function captureParts() {
   const pts = lm.positions;
   skinColor = sampleSkinColor(lm);
   capturedLandmarks = lm;
+  const captureRef = getFaceRef(lm);
 
   parts = [];
-  parts.push(capturePart('Ceja izquierda', pts.slice(17, 22), 1.5, 4.0, 14));
-  parts.push(capturePart('Ceja derecha',   pts.slice(22, 27), 1.5, 4.0, 14));
-  parts.push(capturePart('Ojo izquierdo',  pts.slice(36, 42), 1.8, 2.8, 12));
-  parts.push(capturePart('Ojo derecho',    pts.slice(42, 48), 1.8, 2.8, 12));
-  parts.push(capturePart('Nariz',          pts.slice(27, 36), 1.4, 1.5, 14));
-  parts.push(capturePart('Boca',           pts.slice(48, 60), 1.6, 2.2, 12));
+  parts.push(capturePart('Ceja izquierda', pts.slice(17, 22), 1.5, 4.0, 14, captureRef));
+  parts.push(capturePart('Ceja derecha',   pts.slice(22, 27), 1.5, 4.0, 14, captureRef));
+  parts.push(capturePart('Ojo izquierdo',  pts.slice(36, 42), 1.8, 2.8, 12, captureRef));
+  parts.push(capturePart('Ojo derecho',    pts.slice(42, 48), 1.8, 2.8, 12, captureRef));
+  parts.push(capturePart('Nariz',          pts.slice(27, 36), 1.4, 1.5, 14, captureRef));
+  parts.push(capturePart('Boca',           pts.slice(48, 60), 1.6, 2.2, 12, captureRef));
   parts = parts.filter(Boolean);
   hideLoading();
   state = STATE.CAPTURED;
@@ -736,7 +777,31 @@ async function captureParts() {
 function renderCaptured() {
   ctx.clearRect(0, 0, videoW, videoH);
   ctx.drawImage(dom.video, 0, 0, videoW, videoH);
-  drawErasedFace();
+  drawErasedFace(capturedLandmarks);
+}
+
+// ============================================================
+// Referencia de cara para coordenadas relativas
+// ============================================================
+function getFaceRef(lm) {
+  const pts = lm.positions;
+  const leftEyeCenter  = { x: (pts[36].x + pts[39].x) / 2, y: (pts[36].y + pts[39].y) / 2 };
+  const rightEyeCenter = { x: (pts[42].x + pts[45].x) / 2, y: (pts[42].y + pts[45].y) / 2 };
+  const scale = Math.hypot(
+    rightEyeCenter.x - leftEyeCenter.x,
+    rightEyeCenter.y - leftEyeCenter.y
+  );
+  return { cx: pts[30].x, cy: pts[30].y, scale: scale || 1 };
+}
+
+function getPartScreenPos(part, currentRef) {
+  const s = currentRef.scale / part.captureRef.scale;
+  return {
+    x: currentRef.cx + part.relativeCenter.dx * s,
+    y: currentRef.cy + part.relativeCenter.dy * s,
+    w: part.relativeSize.w * currentRef.scale,
+    h: part.relativeSize.h * currentRef.scale,
+  };
 }
 
 // ============================================================
@@ -757,9 +822,9 @@ function buildFacePolygon(lm) {
   return [...jaw, ...forehead];
 }
 
-function drawErasedFace() {
-  if (!capturedLandmarks) return;
-  const poly = buildFacePolygon(capturedLandmarks);
+function drawErasedFace(lm) {
+  if (!lm) return;
+  const poly = buildFacePolygon(lm);
   let cx = 0, cy = 0;
   for (const p of poly) { cx += p.x; cy += p.y; }
   cx /= poly.length; cy /= poly.length;
@@ -769,23 +834,30 @@ function drawErasedFace() {
   const sk = `rgb(${skinColor[0]}, ${skinColor[1]}, ${skinColor[2]})`;
   const skDark = `rgb(${Math.max(0, skinColor[0]-20)}, ${Math.max(0, skinColor[1]-16)}, ${Math.max(0, skinColor[2]-16)})`;
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(poly[0].x, poly[0].y);
-  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-  ctx.closePath();
   const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
   grad.addColorStop(0, sk);
   grad.addColorStop(0.65, sk);
   grad.addColorStop(1, skDark);
+
+  ctx.save();
+  ctx.filter = 'blur(4px)';
+  ctx.beginPath();
+  ctx.moveTo(poly[0].x, poly[0].y);
+  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+  ctx.closePath();
   ctx.fillStyle = grad;
   ctx.fill();
+  ctx.filter = 'none';
   ctx.restore();
 }
 
-function drawPartImage(part, y) {
+function drawPartImage(part, x, y, w, h) {
   ctx.save();
-  ctx.drawImage(part.image, part.bbox.x, y);
+  if (w != null && h != null) {
+    ctx.drawImage(part.image, x, y, w, h);
+  } else {
+    ctx.drawImage(part.image, part.bbox.x, y);
+  }
   ctx.restore();
 }
 
@@ -833,27 +905,43 @@ function startGame() {
 function renderGameFrame() {
   ctx.clearRect(0, 0, videoW, videoH);
   ctx.drawImage(dom.video, 0, 0, videoW, videoH);
-  drawErasedFace();
+  const eraseLm = (lastDetection ? lastDetection.landmarks : null) ?? capturedLandmarks;
+  drawErasedFace(eraseLm);
+
+  const currentRef = lastDetection ? getFaceRef(lastDetection.landmarks) : null;
+
   // Piezas fijadas
   for (let i = 0; i < currentPartIdx; i++) {
-    drawPartImage(parts[i], parts[i].fixedY - parts[i].h/2);
+    const p = parts[i];
+    if (currentRef) {
+      const pos = getPartScreenPos(p, currentRef);
+      const offsetFromOriginal = p.fixedY - p.originalY;
+      // top-left: centro horizontal - w/2, centro vertical - h/2 + offset de posición fijada
+      drawPartImage(p, pos.x - pos.w / 2, pos.y - pos.h / 2 + offsetFromOriginal, pos.w, pos.h);
+    } else {
+      drawPartImage(p, p.bbox.x, p.fixedY - p.h / 2);
+    }
   }
   // Pieza actual
   if (currentPartIdx < parts.length) {
     const p = parts[currentPartIdx];
     drawTargetGhost(p);
-    // Texto del nombre
     ctx.save();
-    ctx.scale(-1, 1); // contrarrestar el flip del CSS para que el texto se lea bien
+    ctx.scale(-1, 1);
     ctx.font = 'bold 18px system-ui, sans-serif';
     ctx.fillStyle = 'rgba(88, 166, 255, 0.95)';
     ctx.textAlign = 'center';
     ctx.fillText('▼ ' + p.name, -videoW/2, 30);
     ctx.restore();
-    drawPartImage(p, p.currentY);
+    if (currentRef) {
+      const pos = getPartScreenPos(p, currentRef);
+      // p.currentY es el top del sprite; x centrado horizontalmente
+      drawPartImage(p, pos.x - pos.w / 2, p.currentY, pos.w, pos.h);
+    } else {
+      drawPartImage(p, p.bbox.x, p.currentY);
+    }
   }
   dom.partCounter.textContent = Math.min(currentPartIdx + 1, parts.length) + '/' + parts.length;
-  // Score parcial
   const partial = computeScore(true);
   dom.liveScore.textContent = partial.fixedCount > 0 ? partial.score : '-';
 }
@@ -890,17 +978,16 @@ function onBlink() {
 function computeScore(partial) {
   let totalDiff = 0;
   let fixedCount = 0;
-  let maxPossibleDiff = 0;
   for (const p of parts) {
-    maxPossibleDiff += videoH;
     if (p.fixedY != null) {
       const diff = Math.abs(p.fixedY - p.originalY);
-      totalDiff += diff;
+      // Normalizar: 1 unidad de distancia interpupilar = 100px base
+      const normDiff = p.captureRef ? (diff / p.captureRef.scale) * 100 : diff;
+      totalDiff += normDiff;
       fixedCount++;
     }
   }
   if (fixedCount === 0) return { score: 0, totalDiff: 0, fixedCount: 0 };
-  // Score: 100 perfecto. Penalización proporcional al pixel diff.
   const avgDiff = totalDiff / fixedCount;
   const score = Math.max(0, Math.round(100 - avgDiff * 0.6));
   return { score, totalDiff, fixedCount, avgDiff };
@@ -940,6 +1027,9 @@ dom.btnStart.addEventListener('click', async () => {
   try {
     await loadModels();
     await startCamera();
+    earBaseline = await calibrateEAR();
+    earCalibrated = true;
+    setStatus('Calibración lista. Mira al frente y pulsa "Capturar partes"');
     startLiveLoop();
     dom.btnStart.disabled = true;
   } catch (e) {
@@ -955,6 +1045,8 @@ dom.btnReset.addEventListener('click', () => {
   parts = [];
   capturedLandmarks = null;
   currentPartIdx = 0;
+  earHistory.length = 0;
+  earCalibrated = false;
   if (stream) {
     stream.getTracks().forEach(t => t.stop());
     stream = null;
