@@ -2,7 +2,7 @@ name: Deploy to Hub
 
 on:
   push:
-    branches: [main]
+    branches: [master, dev]
 
 jobs:
   deploy:
@@ -24,6 +24,8 @@ jobs:
           cd hub
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
+          git fetch origin
+          git checkout ${{ github.ref_name }} 2>/dev/null || git checkout -b ${{ github.ref_name }} origin/${{ github.ref_name }} 2>/dev/null || git checkout -b ${{ github.ref_name }}
           git add web/public/derretido/
           git diff --staged --quiet || git commit -m "deploy(derretido): update from ${{ github.repository }}@${{ github.sha }}"
-          git push
+          git push origin ${{ github.ref_name }}
