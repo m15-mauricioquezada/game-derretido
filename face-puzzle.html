@@ -120,6 +120,20 @@
     background: #58a6ff;
     transition: width 0.1s linear;
   }
+  #hold-bar {
+    width: 60px;
+    height: 4px;
+    background: #21262d;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  #hold-fill {
+    height: 100%;
+    width: 0%;
+    background: #f0883e;
+    border-radius: 2px;
+    transition: width 0.05s linear;
+  }
   #controls {
     position: absolute;
     bottom: 20px;
@@ -316,7 +330,8 @@
     <div id="blink-indicator" class="hidden">
       <span>👁</span>
       <div id="ear-bar"><div id="ear-fill" style="width:100%"></div></div>
-      <span id="ear-label">EAR</span>
+      <div id="hold-bar"><div id="hold-fill"></div></div>
+      <span id="ear-label">mantén</span>
     </div>
     <div id="controls">
       <button id="btn-start">Iniciar cámara</button>
@@ -411,6 +426,7 @@ const dom = {
   liveScore: document.getElementById('live-score'),
   blinkInd: document.getElementById('blink-indicator'),
   earFill: document.getElementById('ear-fill'),
+  holdFill: document.getElementById('hold-fill'),
   btnStart: document.getElementById('btn-start'),
   btnCapture: document.getElementById('btn-capture'),
   btnPlay: document.getElementById('btn-play'),
@@ -435,8 +451,8 @@ let capturedLandmarks = null;
 let faceLandmarker = null;
 
 const BLINK_COOLDOWN_MS = 800;   // mínimo entre dos triggers
-const BLINK_THRESHOLD  = 0.45;  // umbral para considerar ojos cerrados
-const BLINK_REOPEN     = 0.25;  // umbral para considerar ojos abiertos
+const BLINK_THRESHOLD  = 0.20;  // umbral para considerar ojos cerrados (deliberado)
+const BLINK_REOPEN     = 0.10;  // umbral para considerar ojos abiertos de nuevo
 const BLINK_HOLD_MS    = 500;   // debe mantener ojos cerrados 500ms para disparar
 
 function setStatus(msg, kind) {
@@ -597,10 +613,15 @@ function updateBlink(categories) {
     earState.open = false;
     earState.closedAt = now;
     earState.triggered = false;
+    dom.holdFill.style.width = '0%';
   } else if (!earState.open) {
     if (blink > BLINK_REOPEN) {
-      // Siguen cerrados — disparar si llevan ≥ BLINK_HOLD_MS
-      if (!earState.triggered && now - earState.closedAt >= BLINK_HOLD_MS
+      // Siguen cerrados — actualizar barra de progreso de hold
+      const held = now - earState.closedAt;
+      const progress = Math.min(100, (held / BLINK_HOLD_MS) * 100);
+      dom.holdFill.style.width = progress + '%';
+      // Disparar cuando se cumple el hold
+      if (!earState.triggered && held >= BLINK_HOLD_MS
           && now - earState.lastBlinkAt > BLINK_COOLDOWN_MS) {
         earState.triggered = true;
         earState.lastBlinkAt = now;
@@ -612,6 +633,7 @@ function updateBlink(categories) {
       // Ojos abiertos de nuevo
       earState.open = true;
       earState.triggered = false;
+      dom.holdFill.style.width = '0%';
     }
   }
 }
@@ -812,6 +834,30 @@ function drawPartImage(part, x, y, w, h) {
 }
 
 
+function drawLivePart(part, drawX, drawY, drawW, drawH, currentRef) {
+  const pos = getPartScreenPos(part, currentRef);
+  const srcX = pos.x - pos.w / 2;
+  const srcY = pos.y - pos.h / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(drawX + drawW / 2, drawY + drawH / 2, drawW / 2, drawH / 2, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(dom.video, srcX, srcY, pos.w, pos.h, drawX, drawY, drawW, drawH);
+  // Fade radial en bordes
+  const grad = ctx.createRadialGradient(
+    drawX + drawW / 2, drawY + drawH / 2, 0,
+    drawX + drawW / 2, drawY + drawH / 2, Math.max(drawW, drawH) / 2
+  );
+  grad.addColorStop(0,    'rgba(0,0,0,0)');
+  grad.addColorStop(0.60, 'rgba(0,0,0,0)');
+  grad.addColorStop(1,    'rgba(0,0,0,1)');
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = grad;
+  ctx.fillRect(drawX, drawY, drawW, drawH);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+}
+
 function drawTargetGhost(part) {
   // Marca tenue del lugar correcto
   ctx.save();
@@ -886,7 +932,7 @@ function renderGameFrame() {
     ctx.restore();
     if (currentRef) {
       const pos = getPartScreenPos(p, currentRef);
-      drawPartImage(p, pos.x - pos.w / 2, p.currentY, pos.w, pos.h);
+      drawLivePart(p, pos.x - pos.w / 2, p.currentY, pos.w, pos.h, currentRef);
     } else {
       drawPartImage(p, p.bbox.x, p.currentY);
     }
